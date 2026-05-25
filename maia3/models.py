@@ -381,7 +381,7 @@ class MAIA3Model(nn.Module):
         promo_biases = self.promo_bias_proj(rank8_features) * math.sqrt(self.cfg.head_hid_dim)  # (B, 8, 4) for q,r,b,n
 
         base = scores_base[:, self.rank7_indices][:, :, self.rank8_indices]  # (B, 8, 8)
-        promotion_logits = (base.unsqueeze(-1) + promo_biases.unsqueeze(1)).reshape(x.size(0), 256)
+        promotion_logits = (base.unsqueeze(-1) + promo_biases.unsqueeze(1)).reshape(x.size(0), 256) # (B, 256)
 
         logits_move = torch.cat([scores_flat, promotion_logits], dim=1)  # (B, 4352)
 
