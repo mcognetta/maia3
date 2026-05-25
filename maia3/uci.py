@@ -183,6 +183,8 @@ def sample_from_logits(logits, temperature, top_p):
         choice = torch.multinomial(kept_probs, num_samples=1).item()
         return int(kept_idx[choice].item())
 
+    print(probs[probs > 0.].tolist())
+
     return int(torch.multinomial(probs, num_samples=1).item())
 
 
