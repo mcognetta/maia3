@@ -113,9 +113,6 @@ Each shard is a pickle file containing `list[dict]`; one entry per game:
     "black_elo": int,
     "result":    int,            # 0=black wins, 1=draw, 2=white wins
     "moves":     list[str],      # UCI strings, in play order
-    "time_base": float,          # seconds (0 if unknown)
-    "time_inc":  float,          # seconds (0 if unknown)
-    "clocks":    list[float] | None,   # per-ply clock remaining, optional
 }
 ```
 
@@ -130,9 +127,9 @@ dict are ignored, so a preprocessor can stash future-use fields safely.
 
 [compute_loss](maia3/train.py) is a placeholder — masked cross-entropy on the
 policy head only. Replace it once the model output definitions are settled;
-the per-batch dict already carries `move_idx`, `value_target`,
-`ponder_target`, and `legal_mask` so the multi-head loss can read what it
-needs without further plumbing.
+the per-batch dict already carries `move_idx`, `value_target`, and
+`legal_mask` so the multi-head loss can read what it needs without further
+plumbing.
 
 ## Troubleshooting
 

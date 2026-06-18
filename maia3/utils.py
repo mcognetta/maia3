@@ -64,12 +64,3 @@ def mirror_move(move_uci):
     mirrored_end = mirror_square(end_square)
 
     return mirrored_start + mirrored_end + promotion_piece
-
-
-def parse_time_control(tc: str):
-    # expected forms: "180+2", "180+0", or "180" (no increment)
-    if "+" in tc:
-        base, inc = tc.split("+", 1)
-        return float(base), float(inc)
-    else:
-        return float(tc), 0.0

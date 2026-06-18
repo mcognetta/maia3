@@ -1,0 +1,74 @@
+# Maia3 23m — full training config (architecture + data + recipe).
+#
+# Self-contained: the model size is chosen here, not on the CLI. Run with:
+#
+#   maia3-train --config configs/maia3-23m.yaml --parquet-path data/train.parquet
+#
+# CLI flags override anything here, e.g. --num-steps 300000.
+
+model:
+  # Architecture (~23M params). dim_emb / num_blocks / mlp_ratio and the GAB/norm
+  # flags are shared across all sizes (and match the ModelConfig defaults); the
+  # width-related fields below are what distinguish the size.
+  dim_vit: 512
+  num_heads: 16
+  head_hid_dim: 512
+  gab_gen_size: 128
+  gab_per_square_dim: 32
+  gab_intermediate_dim: 128
+
+  # The canonical history window is 8, but the shipped data/*.parquet were
+  # preprocessed with history=1, so this matches the data (the trainer refuses a
+  # history larger than what the parquet stores). Re-preprocess with --history 8
+  # and bump this to 8 to use the full canonical window.
+  history: 1
+
+data:
+  parquet_path: data/train.parquet       # required: built by maia3-preprocess
+  val_parquet_path: data/valid.parquet    # optional
+  batch_size: 4096
+  val_batch_size: 16
+  num_workers: 8
+
+train:
+  output_dir: runs/maia3-23m
+
+  # Optimizer
+  lr: 5.0e-5
+  min_lr: 1.0e-5
+  weight_decay: 1.0e-6
+  grad_clip: 3.5
+  grad_accum_steps: 4                      # effective batch = batch_size * grad_accum_steps
+
+  # Schedule: 1k linear warmup, then cosine warm restarts every 50k steps.
+  warmup_steps: 1000
+  cosine_cycle_steps: 50000
+  num_steps: 1000000                       # 20 warm-restart cycles (20 * 50000)
+
+  # Mixed precision (GradScaler)
+  use_amp: true
+  amp_init_scale: 256
+  amp_max_scale: 8192
+  amp_growth_factor: 1.5
+  amp_growth_interval: 2000
+  amp_backoff_factor: 0.5
+
+  # Loss scales
+  policy_loss_weight: 1.0
+  value_loss_weight: 0.1
+
+  # Logging / checkpointing / validation (operational — tune freely).
+  # val_steps: 0 runs the full val set each pass.
+  log_interval: 50
+  ckpt_interval: 5000
+  val_interval: 5000
+  val_steps: 0
+
+  # Weights & Biases. Logs loss + value/policy accuracy + policy top-3 for both
+  # train and val. Set use_wandb: true (or pass --use-wandb) to turn it on; run
+  # `wandb login` once first. wandb_mode: online | offline | disabled.
+  use_wandb: true
+  wandb_project: maia3
+  wandb_entity: null                       # null = your default W&B entity
+  wandb_run_name: null                     # null = W&B auto-generates a name
+  wandb_mode: online

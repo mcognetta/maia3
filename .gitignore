@@ -28,6 +28,9 @@ MANIFEST
 *.pth
 *.ckpt
 
+# Parquet
+*.parquet
+
 # Jupyter Notebook
 .ipynb_checkpoints
 

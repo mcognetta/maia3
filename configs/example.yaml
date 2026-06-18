@@ -1,0 +1,28 @@
+# Example Maia3 training config.
+#
+# Run with:  maia3-train --config configs/example.yaml
+#
+# Three optional sections — model, data, train — mirror the dataclasses in
+# maia3/config.py. List only the fields you want to change; anything you omit
+# keeps its default. CLI flags override values set here, e.g.
+#   maia3-train --config configs/example.yaml --lr 1e-4
+#
+# For a full, ready-to-run config at a specific model size, copy one of the
+# configs/maia3-*.yaml (3m / 5m / 23m / 79m) — each fully specifies the
+# architecture plus the data + training recipe. This file is a minimal example
+# that only overrides a handful of fields on top of the ModelConfig defaults.
+
+model:
+  dim_vit: 256
+  num_heads: 8
+  head_hid_dim: 256
+
+data:
+  parquet_path: data/train.parquet       # required: built by maia3-preprocess
+  val_parquet_path: data/val.parquet     # optional
+  batch_size: 512
+
+train:
+  output_dir: runs/example
+  lr: 2.0e-4
+  num_steps: 200000
