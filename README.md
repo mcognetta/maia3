@@ -1,181 +1,120 @@
-# Maia-3
+# Maia-3 Training Reproduction
 
-[![Paper](https://img.shields.io/badge/arXiv-2605.19091-b31b1b?logo=arxiv&logoWidth=10&link=https://arxiv.org/abs/2605.19091)](https://arxiv.org/abs/2605.19091)
-[![Hugging Face](https://img.shields.io/badge/HuggingFace-Models-yellow?link=https://huggingface.co/collections/MaiaChess/maia3)](https://huggingface.co/collections/MaiaChess/maia3)
+This is a training fork of the [Maia3 repo](https://github.com/CSSLab/maia3), which shipped inference only (and with a slightly different model than what was described in [the paper](https://arxiv.org/abs/2605.19091), since that included pondering). This fork implements the base model variants and training objectives from the paper, with two goals:
 
-Maia3 is a family of chess transformer models for matching human moves across
-skill levels. This repository contains the inference code needed to run the
-released Maia3 weights as a UCI chess engine.
+1. Reproduce the results of the Maia team.
+2. Give others a baseline training repo to experiment on top of.
 
-<img src="assets/scale_acc_1d.png" alt="Maia3 against the prior state of the art" width="200">
-
-Maia3 is built on [Chessformer](https://arxiv.org/abs/2605.19091), a transformer
-architecture for chess with Geometric Attention Bias (GAB).
+We include an inference pipeline, but nothing else (bots, UCI, etc.) to keep this repo minimial.
 
 ## Install
 
 ```bash
-git clone https://github.com/CSSLab/maia3.git
-cd maia3
-python -m pip install .
+git clone https://github.com/mcognetta/maia3.git && cd maia3
+uv venv && uv pip install -e .    # or: pip install -e .
 ```
 
-For development, install in editable mode:
+## 1. Prepare data
+
+The training data comes from the [Lichess database](https://database.lichess.org/). `maia3-preprocess` filters the games (Rated Blitz, both players 900–2600 Elo) and writes one parquet row per position to predict.
+
+The bundled script reproduces the full training corpus: it downloads every month from 2023-01 through 2025-07, plus one extra held-out month (2025-08) for validation, and preprocesses them into the shards the configs expect:
 
 ```bash
-python -m pip install -e .
+cd data && ./download_and_rename_datasets.sh
 ```
 
-You can also run directly from the repo without installing:
+NB: The data preparation takes a long time. Each month is 20+ GB when downloaded (compressed) and takes 20+ minutes to process. The final parquet file is relatively small for each month (a few 100 Mb / month). This script parallelizes the downloading and processing, so make sure you have enough hard drive space and cores to handle 4 months processing at once.
 
 ```bash
-python -m maia3.uci --help
+maia3-preprocess --input lichess_2024-01.pgn.zst --output data/train.parquet --history 7 --balance
+maia3-preprocess --input lichess_2024-02.pgn.zst --output data/valid.parquet --history 7 --balance --n-positions 1000000
 ```
 
-## Quick Start
+Important flags:
 
-Run the 79M Maia3 model as a UCI engine:
+- `--history N` — how many past board positions each example carries. This is baked into the parquet; training can use a *smaller* history than the data was built with, but not a larger one.
+- `--balance` — downsample games toward equal representation across rating bins (Appendix A.1 of the paper).
+- `--n-positions M` — stop after M positions in case you want to limit the dataset size (e.g., for validation sets)
+
+The Maia3 paper uses the [allie](https://huggingface.co/datasets/yimingzhang/allie-data/tree/main) dataset. This requires some postprocessing, which we will provide a script for soon.
+
+## 2. Train
+
+Training is based on configuration files in the config directory. These match the reported hyperparameters from the paper, except for the batch size (which we set to be much larger than the paper by default).
 
 ```bash
-maia3-uci --model maia3-79m
+maia3-train --config configs/maia3-5m.yaml
 ```
 
-The first run downloads the checkpoint from Hugging Face and caches it locally.
-After that, the same command reuses the cached file.
+Model size is just a config. Each `configs/maia3-*.yaml` fully specifies an architecture plus the data and training recipe; the sizes differ only in width and the GAB dimensions:
 
-You can also pass the Hugging Face model URL directly:
+| Config | dim_vit | heads | head_hid_dim | gab_gen / per_square / intermediate |
+| --- | --- | --- | --- | --- |
+| [`maia3-3m.yaml`](configs/maia3-3m.yaml)   | 192  | 6  | 192  | 64 / 0 / 64 |
+| [`maia3-5m.yaml`](configs/maia3-5m.yaml)   | 256  | 8  | 256  | 64 / 0 / 64 |
+| [`maia3-23m.yaml`](configs/maia3-23m.yaml) | 512  | 16 | 512  | 128 / 32 / 128 |
+| [`maia3-79m.yaml`](configs/maia3-79m.yaml) | 1024 | 32 | 1024 | 128 / 32 / 128 |
+
+A config has three sections — `model`, `data`, `train` — mirroring the dataclasses in [`maia3/config.py`](maia3/config.py). List only the fields you want to change; unknown fields fail loudly. Every field also exists as a CLI flag, and flags override the config:
 
 ```bash
-maia3-uci --model https://huggingface.co/UofTCSSLab/Maia3-79M
+maia3-train --config configs/maia3-5m.yaml --lr 1e-4 --num-steps 300000
 ```
 
-List built-in aliases:
+Each run writes to a fresh timestamped directory, e.g. `runs/maia3-5m/20260701-093000/`, containing the fully-resolved `config.yaml` (itself a valid `--config` input, so runs are reproducible) and periodic checkpoints. Checkpoints embed their config too, so an interrupted run can be continued with a single flag:
+
+- `--resume-from CKPT` — continue an interrupted run exactly (weights, optimizer, LR schedule, step counter). The flag alone is enough; everything else is read from the checkpoint.
+
+Training data can be a single parquet (`parquet_path`) or a list of shards (`parquet_paths`), which are trained through one at a time — only one shard is in memory at once, and a full pass over the list counts as one epoch.
+
+We save checkpoints every `ckpt_interval` steps. To save space, the `keep_last_k` config field drops older checkpoints. However we always retain the best performing checkpoint (according to the `best_metric` field in the config) as `best.pt` in the output directory.
+
+The provided configs enable Weights & Biases logging — run `wandb login` once, or set `use_wandb: false` in the `train` section to skip it. Loss and policy/value accuracy print to the console either way.
+
+To evaluate a checkpoint on a validation parquet later:
 
 ```bash
-maia3-uci --list-models
+maia3-validate --checkpoint runs/maia3-5m/<run>/best.pt data/valid.parquet
 ```
 
-## Models
+## 3. Inference
 
-The built-in aliases apply the correct architecture settings automatically.
-
-| Alias | Hugging Face repo | Architecture |
-| --- | --- | --- |
-| `maia3-3m-ablation` | `UofTCSSLab/Maia3-ablate-3M` | 8 history, 192 dim, 6 heads |
-| `maia3-5m` | `UofTCSSLab/Maia3-5M` | 8 history, 256 dim, 8 heads |
-| `maia3-23m` | `UofTCSSLab/Maia3-23M` | 8 history, 512 dim, 16 heads |
-| `maia3-79m` | `UofTCSSLab/Maia3-79M` | 8 history, 1024 dim, 32 heads |
-
-Short aliases also work:
+`maia3-infer` runs inference from a checkpoint on a given position.
 
 ```bash
-maia3-uci --model 3m
-maia3-uci --model 5m
-maia3-uci --model 23m
-maia3-uci --model 79m
+maia3-infer --checkpoint runs/maia3-5m/<run>/best.pt \
+    "8/8/7B/1p3kpp/p1b5/2P2KP1/1P6/8 b - - 3 47" --elo-self 1569 --elo-oppo 1579
+
+FEN:  8/8/7B/1p3kpp/p1b5/2P2KP1/1P6/8 b - - 3 47
+Elo:  1569 (self) vs 1579 (opponent)
+LDW:  0.3403 / 0.1344 / 0.5254
+Move probabilities (17 legal moves):
+  f5g6   Kg6    15.49%  ######
+  f5e5   Ke5    12.00%  ####
+  f5e6   Ke6    11.58%  ####
+  g5g4   g4+    11.46%  ####
+  f5f6   Kf6     9.41%  ###
+  c4d3   Bd3     7.91%  ###
 ```
 
-`maia3-3m` is kept as a compatibility alias for `maia3-3m-ablation`.
+It prints the win/draw/loss estimate and a probability for every legal move. Since the models are history-aware, you can also pass several FENs (oldest first) and the last one is the position to move from.
 
-If a Hugging Face repository contains more than one checkpoint file, choose one:
+### Python API
 
-```bash
-maia3-uci --model UofTCSSLab/Maia3-79M --checkpoint-filename maia3-79m.pt
-```
-
-To use a local checkpoint while still applying a built-in config:
-
-```bash
-maia3-uci --model maia3-79m --checkpoint-path /path/to/maia3-79m.pt
-```
-
-Pass local files with `--checkpoint-path`, not `--model`, so Maia3 knows
-whether to use a built-in architecture preset or your custom architecture flags.
-
-To use a fully custom checkpoint, pass the checkpoint and the matching
-architecture flags:
-
-```bash
-maia3-uci --checkpoint-path /path/to/custom.pt \
-  --history 8 --use-padding \
-  --dim-vit 256 --head-hid-dim 256 --num-heads 8 \
-  --gab-per-square-dim 0 --gab-gen-size 64 --gab-intermediate-dim 64
-```
-
-## UCI Options
-
-The engine reads UCI commands from stdin and writes responses to stdout. Any
-UCI-aware chess GUI or wrapper can drive it.
-
-User-facing options:
-
-- `Elo`: set both player and opponent Elo.
-- `SelfElo`: set the side-to-move Elo.
-- `OppoElo`: set the opponent Elo.
-- `Temperature`: move sampling temperature. `0` means argmax.
-- `TopP`: nucleus sampling threshold. `1.0` disables top-p filtering.
-
-Launch with reconstructed move history:
-
-```bash
-maia3-uci --model maia3-79m --use-uci-history
-```
-
-Launch on CPU:
-
-```bash
-maia3-uci --model maia3-5m --device cpu --no-use-amp
-```
-
-By default, Maia3 only loads tensor state-dict checkpoints. If you need to load
-an old pickled checkpoint from a source you trust, add `--trust-checkpoint`.
-
-## Example via python-chess
+We have a similar Python API to the [simple-maia3-inference](https://github.com/mcognetta/simple-maia3-inference) repo.
 
 ```python
-import chess
-import chess.engine
+from maia3.infer import Maia3
 
-eng = chess.engine.SimpleEngine.popen_uci([
-    "maia3-uci",
-    "--model", "maia3-5m",
-    "--use-uci-history",
-    "--elo", "1500",
-])
-
-board = chess.Board()
-print(eng.play(board, limit=chess.engine.Limit(nodes=1)).move)
-eng.close()
+maia = Maia3("runs/maia3-5m/<run>/best.pt")
+move_probs, ldw = maia.probs(
+    "8/8/7B/1p3kpp/p1b5/2P2KP1/1P6/8 b - - 3 47", 1569, 1579
+)
 ```
 
-If the `maia3-uci` script is not on your `PATH`, use Python module execution:
+`move_probs` is a `{uci: probability}` dict over the legal moves, sorted best-first; `ldw` is the (loss, draw, win) tuple for the side to move. There are also `logits` and batched variants — see [`maia3/infer.py`](maia3/infer.py).
 
-```python
-import sys
+## License
 
-cmd = [sys.executable, "-m", "maia3.uci", "--model", "maia3-5m"]
-```
-
-## Legacy Entry Point
-
-The old command still works from the repository root:
-
-```bash
-python code/uci.py --model maia3-5m
-```
-
-New integrations should prefer `maia3-uci` or `python -m maia3.uci`.
-
-## Paper and Citation
-
-Read the paper here: [Chessformer: A Unified Architecture for Chess Modeling](https://arxiv.org/abs/2605.19091)
-
-```bibtex
-@inproceedings{monroe2026chessformer,
-title={Chessformer: A Unified Architecture for Chess Modeling},
-author={Daniel Monroe and George Eilender and Philip Chalmers and Zhenwei Tang and Ashton Anderson},
-booktitle={The Fourteenth International Conference on Learning Representations},
-year={2026},
-url={https://openreview.net/forum?id=2ltBRzEHyd}
-}
-```
+AGPL-3.0, same as the upstream repo — see [LICENSE](LICENSE).

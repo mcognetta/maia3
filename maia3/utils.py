@@ -3,10 +3,6 @@ import random
 import numpy as np
 import torch
 import chess
-from pathlib import Path
-
-CODE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = CODE_DIR.parent
 
 
 def seed_everything(seed: int):
@@ -30,7 +26,6 @@ def get_all_possible_moves():
             for target_rank in range(8):
                 for target_file in range(8):
                     target_square = chess.square(target_file, target_rank)
-                    move = chess.Move(square, target_square)
                     all_moves.append(chess.square_name(square) + chess.square_name(target_square))
 
     # NOTE: promotions will always be from rank 7 to rank 8, because we are flipping
@@ -64,12 +59,3 @@ def mirror_move(move_uci):
     mirrored_end = mirror_square(end_square)
 
     return mirrored_start + mirrored_end + promotion_piece
-
-
-def parse_time_control(tc: str):
-    # expected forms: "180+2", "180+0", or "180" (no increment)
-    if "+" in tc:
-        base, inc = tc.split("+", 1)
-        return float(base), float(inc)
-    else:
-        return float(tc), 0.0

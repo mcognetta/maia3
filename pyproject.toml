@@ -5,27 +5,48 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "maia3"
 version = "0.1.0"
-description = "Inference tools for Maia3 chess models"
+description = "Training reproduction of the Maia3 chess models"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [
-  { name = "UofT CSSLab" }
+  { name = "Marco Cognetta" },
+  { name = "UofT CSSLab" }  # upstream Maia3 (model and inference)
 ]
 dependencies = [
-  "huggingface-hub>=0.23",
   "numpy",
+  "pyarrow",
   "python-chess",
-  "torch",
+  "pyyaml",
+  "torch==2.11.0",
+  "tqdm",
+  "wandb",
+  "zstandard",
 ]
 
 [project.urls]
-Homepage = "https://github.com/CSSLab/maia3"
+Homepage = "https://github.com/mcognetta/maia3"
+Upstream = "https://github.com/CSSLab/maia3"
 Models = "https://huggingface.co/collections/MaiaChess/maia3"
 Paper = "https://arxiv.org/abs/2605.19091"
 
 [project.scripts]
-maia3-uci = "maia3.uci:main"
+maia3-preprocess = "maia3.preprocess:main"
+maia3-train = "maia3.train:main"
+maia3-validate = "maia3.validate:main"
+maia3-infer = "maia3.infer:main"
 
 [tool.setuptools.packages.find]
 include = ["maia3*"]
+
+# Resolve torch from PyTorch's CUDA 12.8 wheel index (the +cu128 builds) rather
+# than the default PyPI wheels, which lack the matching CUDA/cuDNN libraries.
+# Builders needing a different CUDA/CPU build should point this at the matching
+# index (e.g. .../whl/cu121 or .../whl/cpu).
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
